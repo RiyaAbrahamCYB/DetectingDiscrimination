@@ -6,6 +6,10 @@ import random
 import sys
 import time
 import traceback
+import psutil
+import pandas as pd
+from pathlib import Path
+from openpyxl import Workbook, load_workbook
 from glob import glob
 from hashlib import md5
 
@@ -31,6 +35,9 @@ from .utils.webdriver_utils import (
     scroll_down,
     wait_until_loaded,
 )
+from typing import Optional
+from openpyxl import Workbook, load_workbook
+from openpyxl.utils import get_column_letter
 
 # Constants for bot mitigation
 NUM_MOUSE_MOVES = 10  # Times to randomly move the mouse
@@ -111,15 +118,16 @@ def tab_restart_browser(webdriver):
 
 
 class GetCommand(BaseCommand):
+    
     """goes to <url> using the given <webdriver> instance"""
 
     def __init__(self, url, sleep):
         self.url = url
         self.sleep = sleep
-
+        
     def __repr__(self):
         return "GetCommand({},{})".format(self.url, self.sleep)
-
+        
     def execute(
         self,
         webdriver: Firefox,
@@ -127,6 +135,40 @@ class GetCommand(BaseCommand):
         manager_params: ManagerParams,
         extension_socket: ClientSocket,
     ) -> None:
+        # Initialize Excel workbook
+        
+        def get_firefox_bin_process():
+            """Find and return the Firefox process"""
+            for proc in psutil.process_iter(["pid", "name"]):
+                if proc.info["name"] == "firefox-bin":
+                    return psutil.Process(proc.info["pid"])
+            return None    
+        firefox_proc = get_firefox_bin_process()
+        if firefox_proc is not None:
+            try:
+                print("storing initial resource values")
+                # Perform resource usage tracking
+                memory_start = firefox_proc.memory_info().rss
+                cpu_start = (firefox_proc.cpu_times().user + firefox_proc.cpu_times().system)
+                start_time = time.time()
+                disk_write_start = firefox_proc.io_counters().write_bytes
+                disk_read_start = firefox_proc.io_counters().read_bytes
+                disk_start = disk_write_start + disk_read_start
+            except:
+                print(f"Process {firefox_proc.pid} no longer exists.")
+                memory_start = None
+                cpu_start = None
+                disk_write_start = None
+                disk_read_start = None
+                disk_start = None
+        else:
+            print("Process is none")
+            memory_start = None
+            cpu_start = None
+            disk_write_start = None
+            disk_read_start = None
+            disk_start = None
+            
         tab_restart_browser(webdriver)
 
         if extension_socket is not None:
@@ -154,8 +196,80 @@ class GetCommand(BaseCommand):
 
         if browser_params.bot_mitigation:
             bot_mitigation(webdriver)
+            
+        firefox_proc = get_firefox_bin_process()
+        if firefox_proc is not None:
+            try:
+                print("storing final resource values")
+                # Perform resource usage tracking
+                memory_end = firefox_proc.memory_info().rss
+                cpu_end = (firefox_proc.cpu_times().user + firefox_proc.cpu_times().system)
+                end_time = time.time()
+                disk_write_end = firefox_proc.io_counters().write_bytes
+                disk_read_end = firefox_proc.io_counters().read_bytes
+                disk_end = disk_write_end + disk_read_end
+            except:
+                print(f"Process {firefox_proc.pid} no longer exists.")
+                memory_end = None
+                cpu_end = None
+                disk_write_end = None 
+                disk_read_end = None
+                disk_end = None
+        else:
+            print("Process is none")
+            memory_end = None
+            cpu_end = None
+            disk_write_end = None 
+            disk_read_end = None
+            disk_end = None
+            
+        if memory_start is not None and memory_end is not None:
+            memory_usage = max(0, (memory_end - memory_start) / (1024 * 1024))  # Convert to MB
+        else:
+            memory_usage = 0
+            
+        if cpu_start is not None and cpu_end is not None:
+            elapsed_time = end_time - start_time
+            cpu_usage = ((cpu_end - cpu_start) / elapsed_time) * 100 / psutil.cpu_count()  # Normalize by number of cores and caluclating CPU usgae in percentage
+        else:
+            cpu_usage = 0
+            
+        if disk_write_start is not None and disk_write_end is not None:
+            disk_write = max(0,disk_write_end - disk_write_start)
+        else:
+            disk_write = 0
+            
+        if disk_read_start is not None and disk_read_end is not None:
+            disk_read = max(0,disk_read_end - disk_read_start)
+        else:
+            disk_read = 0
+        
+        if disk_end is not None and disk_start is not None:    
+            disk_usage = max(0, disk_end - disk_start)
+        else:
+            disk_usage = 0
+            
+        print(f"URL: {self.url}, CPU Usage: {cpu_usage:.2f}%, Memory Usage: {memory_usage:.2f} MB, Disk Write: {disk_write} Bytes, Disk Read: {disk_read} Bytes, Disk Usage: {disk_usage} Bytes")
+        file_name = Path("./datadir/ResourceUsage.xlsx")
+        
+        # Load an existing workbook 
+        workbook = load_workbook(file_name)
+        sheet = workbook.active
+        
+        # Find the next empty row
+        next_row = sheet.max_row + 1
 
-
+        # Write data to the next empty row
+        sheet.cell(row=next_row, column=1, value=self.url)
+        sheet.cell(row=next_row, column=2, value=cpu_usage)
+        sheet.cell(row=next_row, column=3, value=memory_usage)
+        sheet.cell(row=next_row, column=4, value=disk_write)
+        sheet.cell(row=next_row, column=5, value=disk_read)
+        sheet.cell(row=next_row, column=6, value=disk_usage)
+        
+        # Save the workbook
+        workbook.save(file_name)
+        
 class BrowseCommand(BaseCommand):
     def __init__(self, url, num_links, sleep):
         self.url = url

@@ -77,6 +77,7 @@ class BrowserParams(DataClassJsonMixin):
     to customize behaviour of an individual browser
     """
 
+    extension_enabled: bool = True
     cookie_instrument: bool = True
     js_instrument: bool = False
     js_instrument_settings: List[Union[str, dict]] = field(
